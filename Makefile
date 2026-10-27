@@ -1,7 +1,7 @@
 .PHONY: build test check install
 
 build:
-	go build -trimpath -ldflags='-s -w' -o bin/slack-hours .
+	go build -trimpath -ldflags='-s -w' -o bin/slack-hours ./cmd/slack-hours
 
 test:
 	go test -race ./...

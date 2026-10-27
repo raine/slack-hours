@@ -17,8 +17,10 @@ const version = "0.1.0"
 
 const helpText = `slack-hours — local controls for one Slack workspace
 
+  init                 Interactive first-time setup (preserves existing config)
   init --workspace-id ID --workspace-name NAME
-                       Create configuration without overwriting it
+                       Noninteractive setup with the default schedule
+  configure            Edit configuration interactively
   hide | show          Override until the next scheduled transition
   auto                 Clear override and follow schedule now
   status [--json]      Live guard status (uses daemon connection when running)
@@ -109,6 +111,19 @@ func runCLI(ctx context.Context, args []string, p Paths) int {
 			return fail(err)
 		}
 		return 0
+	}
+	if cmd == "configure" || (cmd == "init" && len(args) == 0 && !jsonOutput) {
+		_, statErr := os.Stat(p.configFile())
+		if cmd == "configure" || errors.Is(statErr, os.ErrNotExist) {
+			info, err := os.Stdin.Stat()
+			if jsonOutput || err != nil || info.Mode()&os.ModeCharDevice == 0 {
+				return fail(errors.New("interactive setup requires a terminal; use init --workspace-id ID --workspace-name NAME for scripts"))
+			}
+			if err := configure(ctx, p, os.Stdin, os.Stdout); err != nil {
+				return fail(err)
+			}
+			return 0
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()

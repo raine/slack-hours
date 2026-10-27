@@ -23,12 +23,21 @@ exactly as Slack displays it.
 
 ```sh
 make build
-./bin/slack-hours init --workspace-id T01234567 --workspace-name 'Work'
+./bin/slack-hours init
 ./bin/slack-hours install
 ```
 
-Replace the example ID and name with yours. Add `~/.local/bin` to your `PATH`.
-Then quit Slack and start it with:
+The setup wizard asks for your workspace ID or URL, workspace name, visible
+days and hours, timezone, and debugging port. Press Enter to accept defaults.
+Review the summary and confirm to save; Ctrl+C cancels without changing files.
+
+For scripts, supply the workspace directly to use the default schedule:
+
+```sh
+./bin/slack-hours init --workspace-id T01234567 --workspace-name 'Work'
+```
+
+Add `~/.local/bin` to your `PATH`. Then quit Slack and start it with:
 
 ```sh
 slack-hours launch
@@ -106,12 +115,17 @@ or restart; the scheduler reinstalls them while debugging is available.
 ## Configuration and removal
 
 `init` creates configuration only if it does not exist; rerunning it with
-different workspace flags leaves existing settings unchanged. To change the
-workspace, edit `workspaceId` and `workspaceName` in
-`~/.config/slack-hours/config.json`. The debugging port is stored as `port`.
+different workspace flags leaves existing settings unchanged. Run
+`slack-hours configure` to edit settings interactively, using existing values
+as defaults. Saving preserves manual hide/show overrides; run
+`slack-hours auto` to return to the schedule. You can also edit `workspaceId`,
+`workspaceName`, `port`, and `schedule` in
+`~/.config/slack-hours/config.json`.
 
 After changing the workspace or port, quit Slack and run `slack-hours launch`
-again. Schedule commands update the same file without requiring a restart.
+again. Schedule edits made through the wizard take effect within a minute
+while the scheduler is running. The `schedule set` command applies them
+immediately when Slack is reachable. Neither requires a restart.
 
 Other files:
 
@@ -144,7 +158,8 @@ make check   # Go vet, race-enabled tests, JavaScript hook tests
 make build
 ```
 
-Node.js is required for the hook tests. The runtime uses Go,
+CLI source, Go tests, and embedded hooks live in `cmd/slack-hours/`.
+JavaScript hook tests live in `test/`. Node.js is required for the hook tests. The runtime uses Go,
 `gorilla/websocket`, and embedded JavaScript hooks. The daemon keeps one
 connection to Slack, with timers and renderer events driving reconciliation.
 A filtered DOM observer maintains hidden entries and disconnects while shown.
@@ -153,7 +168,7 @@ The optional live test changes workspace visibility and reloads your actual
 Slack client. It restores the original override afterward:
 
 ```sh
-SLACK_HOURS_LIVE=1 go test -run '^TestLiveDaemon$' -v .
+SLACK_HOURS_LIVE=1 go test -run '^TestLiveDaemon$' -v ./cmd/slack-hours
 ```
 
 ## License
