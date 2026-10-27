@@ -17,7 +17,7 @@ trap 'rm -rf "$package_dir"' EXIT
 # Static binaries carry dependency licenses alongside the project license.
 go mod download
 mkdir -p "$package_dir/licenses"
-cp LICENSE README.md "$package_dir/"
+cp LICENSE README.md CONTRIBUTING.md "$package_dir/"
 cp "$(go env GOROOT)/LICENSE" "$package_dir/licenses/go-LICENSE"
 while read -r module_path module_dir; do
   [[ -n "$module_dir" ]] || continue
@@ -33,7 +33,7 @@ for arch in arm64 amd64; do
   CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath \
     -ldflags="-s -w -X main.version=${version#v}" \
     -o "$package_dir/slack-hours" ./cmd/slack-hours
-  tar -czf "$dist_dir/$archive" -C "$package_dir" slack-hours README.md LICENSE licenses
+  tar -czf "$dist_dir/$archive" -C "$package_dir" slack-hours README.md CONTRIBUTING.md LICENSE licenses
   (cd "$dist_dir" && shasum -a 256 "$archive" > "slack-hours-darwin-$arch.sha256")
   printf 'Built %s\n' "$dist_dir/$archive"
 done
