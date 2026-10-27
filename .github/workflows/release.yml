@@ -1,0 +1,75 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: make check
+      - name: Build release archives
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/package-release "$RELEASE_TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+  smoke:
+    needs: build
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+      - name: Test installer
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 test/installer.py dist "$RELEASE_TAG"
+      - name: Verify archive and executable
+        env:
+          ARCH: ${{ matrix.arch }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          shasum -a 256 -c "slack-hours-darwin-$ARCH.sha256"
+          tar -xzf "slack-hours-darwin-$ARCH.tar.gz"
+          test "$(./slack-hours version)" = "slack-hours ${RELEASE_TAG#v}"
+  publish:
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          args=(--verify-tag --generate-notes)
+          if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/*.sha256 "${args[@]}"

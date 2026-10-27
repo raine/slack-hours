@@ -211,6 +211,10 @@ func (c *CDP) Scope(ctx context.Context, fn Remote, name string) (Remote, error)
 	}
 	return Remote{}, fmt.Errorf("unsupported Slack preload: missing scope variable %s", name)
 }
+
+var errMultipleClients = errors.New("multiple Slack client windows; close extra windows before attaching")
+var errClientNotReady = errors.New("Slack client is not ready or signed in")
+
 func discovery(ctx context.Context, port int) (string, string, error) {
 	transport := &http.Transport{Proxy: nil}
 	defer transport.CloseIdleConnections()
@@ -249,13 +253,13 @@ func discovery(ctx context.Context, port int) (string, string, error) {
 		u, err := url.Parse(t.URL)
 		if err == nil && t.Type == "page" && u.Scheme == "https" && u.Host == "app.slack.com" && (u.Path == "/client" || strings.HasPrefix(u.Path, "/client/")) {
 			if endpoint != "" {
-				return "", "", errors.New("multiple Slack client windows; close extra windows before attaching")
+				return "", "", errMultipleClients
 			}
 			endpoint = t.Socket
 		}
 	}
 	if endpoint == "" {
-		return "", "", errors.New("Slack client is not ready or signed in")
+		return "", "", errClientNotReady
 	}
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme != "ws" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" && u.Hostname() != "::1") || u.Port() != strconv.Itoa(port) || u.User != nil {

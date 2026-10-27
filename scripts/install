@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() { printf 'slack-hours: %s\n' "$*" >&2; exit 1; }
+download() {
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --retry 3 --connect-timeout 15 --max-time 180 "$@"
+}
+
+[[ "$(uname -s)" == Darwin ]] || fail 'prebuilt binaries support macOS only'
+case "$(uname -m)" in
+  arm64 | aarch64) arch=arm64 ;;
+  x86_64 | amd64) arch=amd64 ;;
+  *) fail 'unsupported processor architecture' ;;
+esac
+for tool in curl tar shasum; do
+  command -v "$tool" >/dev/null || fail "required command not found: $tool"
+done
+
+repo_url=https://github.com/raine/slack-hours
+version=${SLACK_HOURS_VERSION:-}
+if [[ -z "$version" ]]; then
+  if ! release_url=$(download --output /dev/null --write-out '%{url_effective}' "$repo_url/releases/latest"); then
+    fail "could not find the latest release; check your connection and $repo_url/releases. If none is published, build from source: $repo_url#set-up"
+  fi
+  version=${release_url##*/}
+  [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]] || fail "no binary release is available; build from source: $repo_url#set-up"
+fi
+[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]] || fail 'set SLACK_HOURS_VERSION to a release tag such as v0.1.0'
+
+archive="slack-hours-darwin-$arch.tar.gz"
+checksum="slack-hours-darwin-$arch.sha256"
+tmp_dir=$(mktemp -d)
+tmp_binary=
+cleanup() {
+  rm -rf "$tmp_dir"
+  [[ -z "$tmp_binary" ]] || rm -f "$tmp_binary"
+  return 0
+}
+trap cleanup EXIT
+printf 'Downloading slack-hours %s for macOS %s…\n' "$version" "$arch"
+download --output "$tmp_dir/$archive" "$repo_url/releases/download/$version/$archive"
+download --output "$tmp_dir/$checksum" "$repo_url/releases/download/$version/$checksum"
+expected=$(awk -v name="$archive" '$2 == name {print $1}' "$tmp_dir/$checksum")
+[[ "$expected" =~ ^[a-fA-F0-9]{64}$ ]] || fail 'invalid checksum file'
+actual=$(shasum -a 256 "$tmp_dir/$archive")
+[[ "${actual%% *}" == "$expected" ]] || fail 'checksum verification failed; nothing installed'
+
+# Extract only the executable and reject links before running it.
+tar -xzf "$tmp_dir/$archive" -C "$tmp_dir" slack-hours
+[[ -f "$tmp_dir/slack-hours" && ! -L "$tmp_dir/slack-hours" ]] || fail 'archive does not contain a regular slack-hours executable'
+chmod 755 "$tmp_dir/slack-hours"
+[[ "$("$tmp_dir/slack-hours" version)" == "slack-hours ${version#v}" ]] || fail 'downloaded binary has the wrong version or cannot run'
+
+install_prefix=${SLACK_HOURS_PREFIX:-"$HOME/.local"}
+[[ "$install_prefix" == /* ]] || fail 'SLACK_HOURS_PREFIX must be an absolute path'
+lib_dir="$install_prefix/lib/slack-hours"
+bin_dir="$install_prefix/bin"
+binary="$lib_dir/slack-hours"
+link="$bin_dir/slack-hours"
+if [[ -e "$link" || -L "$link" ]]; then
+  [[ -L "$link" && "$(readlink "$link")" == "$binary" ]] || fail "refusing to replace unrelated file: $link"
+fi
+mkdir -p "$lib_dir" "$bin_dir"
+tmp_binary=$(mktemp "$lib_dir/.slack-hours.XXXXXX")
+cp "$tmp_dir/slack-hours" "$tmp_binary"
+chmod 755 "$tmp_binary"
+mv -f "$tmp_binary" "$binary"
+tmp_binary=
+if [[ ! -L "$link" ]]; then
+  ln -s "$binary" "$link"
+fi
+printf '\nInstalled %s at %s\n' "$version" "$link"
+if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
+  printf 'Add %s to your PATH.\n' "$bin_dir"
+fi
+printf '\nNext steps:\n  "%s" init\n  "%s" install\n  "%s" status\n' "$link" "$link" "$link"
+printf '\nAlready configured? Run "%s" install to restart the scheduler.\n' "$link"
+printf 'Open Slack with "%s" launch from now on.\n' "$link"

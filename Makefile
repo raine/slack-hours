@@ -1,7 +1,9 @@
-.PHONY: build test check install
+.PHONY: build test check install release
+
+VERSION ?= dev
 
 build:
-	go build -trimpath -ldflags='-s -w' -o bin/slack-hours ./cmd/slack-hours
+	go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o bin/slack-hours ./cmd/slack-hours
 
 test:
 	go test -race ./...
@@ -13,3 +15,6 @@ check:
 
 install: build
 	./bin/slack-hours install
+
+release:
+	./scripts/package-release "$(VERSION)"

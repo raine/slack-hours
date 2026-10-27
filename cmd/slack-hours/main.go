@@ -11,9 +11,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/charmbracelet/x/term"
 )
 
-const version = "0.1.0"
+var version = "dev"
 
 const helpText = `slack-hours — local controls for one Slack workspace
 
@@ -21,6 +23,7 @@ const helpText = `slack-hours — local controls for one Slack workspace
   init --workspace-id ID --workspace-name NAME
                        Noninteractive setup with the default schedule
   configure            Edit configuration interactively
+  workspaces [--json]   List signed-in workspaces (no configuration needed)
   hide | show          Override until the next scheduled transition
   auto                 Clear override and follow schedule now
   status [--json]      Live guard status (uses daemon connection when running)
@@ -115,8 +118,7 @@ func runCLI(ctx context.Context, args []string, p Paths) int {
 	if cmd == "configure" || (cmd == "init" && len(args) == 0 && !jsonOutput) {
 		_, statErr := os.Stat(p.configFile())
 		if cmd == "configure" || errors.Is(statErr, os.ErrNotExist) {
-			info, err := os.Stdin.Stat()
-			if jsonOutput || err != nil || info.Mode()&os.ModeCharDevice == 0 {
+			if jsonOutput || !term.IsTerminal(os.Stdin.Fd()) {
 				return fail(errors.New("interactive setup requires a terminal; use init --workspace-id ID --workspace-name NAME for scripts"))
 			}
 			if err := configure(ctx, p, os.Stdin, os.Stdout); err != nil {
@@ -127,6 +129,38 @@ func runCLI(ctx context.Context, args []string, p Paths) int {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
+	if cmd == "workspaces" || cmd == "launch" {
+		c := defaultConfig()
+		readErr := readJSON(p.configFile(), &c)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return fail(readErr)
+		}
+		if cmd == "workspaces" {
+			workspaces, err := listWizardWorkspaces(ctx, c.Port)
+			if err != nil {
+				return fail(fmt.Errorf("cannot list workspaces: %w; run slack-hours launch first", err))
+			}
+			if jsonOutput {
+				printJSON(workspaces)
+			} else {
+				for _, workspace := range workspaces {
+					fmt.Printf("%s  %s\n", workspace.ID, workspace.Name)
+				}
+			}
+			return 0
+		}
+		if errors.Is(readErr, os.ErrNotExist) {
+			if err := startSlack(ctx, c.Port); err != nil {
+				return fail(err)
+			}
+			if jsonOutput {
+				printJSON(map[string]bool{"connected": true, "configured": false})
+			} else {
+				fmt.Println("Slack is ready for setup. Run slack-hours init.")
+			}
+			return 0
+		}
+	}
 	if cmd == "init" {
 		unlock, err := lockFile(ctx, filepath.Join(p.StateDir, "apply.flock"), true)
 		if err != nil {
@@ -136,6 +170,7 @@ func runCLI(ctx context.Context, args []string, p Paths) int {
 		if _, err = os.Stat(p.configFile()); errors.Is(err, os.ErrNotExist) {
 			c := defaultConfig()
 			seen := map[string]bool{}
+			var scheduleArgs []string
 			for len(args) > 0 {
 				if len(args) < 2 || seen[args[0]] {
 					return fail(errors.New("init requires unique flags with values"))
@@ -146,10 +181,18 @@ func runCLI(ctx context.Context, args []string, p Paths) int {
 					c.WorkspaceID = args[1]
 				case "--workspace-name":
 					c.WorkspaceName = args[1]
+				case "--days", "--hours", "--timezone":
+					scheduleArgs = append(scheduleArgs, args[:2]...)
 				default:
 					return fail(fmt.Errorf("unknown init flag %s", args[0]))
 				}
 				args = args[2:]
+			}
+			if len(scheduleArgs) > 0 {
+				c.Schedule, err = parseSchedule(scheduleArgs, c.Schedule)
+				if err != nil {
+					return fail(err)
+				}
 			}
 			if err = c.validate(); err != nil {
 				return fail(fmt.Errorf("init requires --workspace-id and --workspace-name: %w", err))
@@ -166,6 +209,7 @@ func runCLI(ctx context.Context, args []string, p Paths) int {
 			printJSON(map[string]string{"configPath": p.configFile()})
 		} else {
 			fmt.Println("Configuration:", p.configFile())
+			fmt.Println("Run slack-hours configure to change settings, or slack-hours install to start the scheduler.")
 		}
 		return 0
 	}

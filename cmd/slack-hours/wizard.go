@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"charm.land/huh/v2"
 )
 
 var errSetupCancelled = errors.New("setup cancelled; configuration unchanged")
@@ -35,6 +36,10 @@ func workspaceID(value string) string {
 
 // Prompting happens before taking the mutation lock; saving checks for concurrent edits.
 func configure(ctx context.Context, p Paths, input io.Reader, output io.Writer) error {
+	return configureWithWizard(ctx, p, input, output, configurationWizard)
+}
+
+func configureWithWizard(ctx context.Context, p Paths, input io.Reader, output io.Writer, wizard func(context.Context, io.Reader, io.Writer, Config) (Config, error)) error {
 	original, err := os.ReadFile(p.configFile())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -45,7 +50,8 @@ func configure(ctx context.Context, p Paths, input io.Reader, output io.Writer) 
 			return fmt.Errorf("read existing configuration: %w", err)
 		}
 	}
-	c, err = configurationWizard(ctx, input, output, c)
+	previous := c
+	c, err = wizard(ctx, input, output, c)
 	if err != nil {
 		return err
 	}
@@ -70,124 +76,151 @@ func configure(ctx context.Context, p Paths, input io.Reader, output io.Writer) 
 		return err
 	}
 	fmt.Fprintln(output, "Saved configuration:", p.configFile())
-	fmt.Fprintln(output, "Existing hide/show overrides are unchanged. Use 'slack-hours auto' to follow the schedule.")
-	fmt.Fprintln(output, "If you changed the workspace or port, quit Slack and run 'slack-hours launch'.")
-	fmt.Fprintln(output, "For first-time setup, run 'slack-hours install', then quit Slack and run 'slack-hours launch'.")
+	if len(original) == 0 {
+		fmt.Fprintln(output, "Next: run slack-hours install, then slack-hours status.")
+	} else if previous.WorkspaceID != c.WorkspaceID || previous.Port != c.Port {
+		fmt.Fprintln(output, "Quit Slack, then run slack-hours launch to apply the new workspace.")
+	} else {
+		fmt.Fprintln(output, "The running scheduler will apply your settings within a minute. Run slack-hours status to verify.")
+	}
+	var override Override
+	if readJSON(p.overrideFile(), &override) == nil && override.ExpiresAt.After(time.Now()) && (override.Mode == "hide" || override.Mode == "show") {
+		fmt.Fprintf(output, "Your %s override lasts until %s. Run slack-hours auto to follow the schedule now.\n", override.Mode, override.ExpiresAt.Format(time.RFC3339))
+	}
+	fmt.Fprintln(output, "Open Slack with slack-hours launch from now on.")
 	return nil
 }
 
-func configurationWizard(ctx context.Context, input io.Reader, output io.Writer, c Config) (Config, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	lines := make(chan string)
-	scanErrors := make(chan error, 1)
-	go func() {
-		scanner := bufio.NewScanner(input)
-		for scanner.Scan() {
-			select {
-			case lines <- scanner.Text():
-			case <-ctx.Done():
-				return
-			}
-		}
-		scanErrors <- scanner.Err()
-		close(lines)
-	}()
-	ask := func(label, fallback string, accept func(string) error) error {
-		for {
-			fmt.Fprint(output, label)
-			if fallback != "" {
-				fmt.Fprintf(output, " [%s]", fallback)
-			}
-			fmt.Fprint(output, ": ")
-			var value string
-			select {
-			case <-ctx.Done():
-				return errSetupCancelled
-			case line, ok := <-lines:
-				if !ok {
-					if err := <-scanErrors; err != nil {
-						return err
-					}
-					return errSetupCancelled
-				}
-				value = strings.TrimSpace(line)
-			}
-			if value == "" {
-				value = fallback
-			}
-			if err := accept(value); err != nil {
-				fmt.Fprintln(output, err)
-				continue
-			}
-			return nil
-		}
+type wizardValues struct {
+	Workspace, Name, Hours, TimeZone, Port string
+	Days                                   []string
+	Save                                   bool
+}
+
+func (v *wizardValues) config() (Config, error) {
+	c := defaultConfig()
+	c.WorkspaceID, c.WorkspaceName = workspaceID(strings.TrimSpace(v.Workspace)), strings.TrimSpace(v.Name)
+	var err error
+	c.Port, err = strconv.Atoi(strings.TrimSpace(v.Port))
+	if err != nil {
+		return c, errors.New("enter a port from 1024 to 65535")
 	}
-	fmt.Fprintln(output, "Configure slack-hours\nPress Enter to keep a default. Ctrl+C cancels without saving.")
-	fmt.Fprintln(output, "Find your workspace ID after /client/ in its Slack web URL.")
-	if err := ask("Workspace ID or URL", c.WorkspaceID, func(v string) error {
-		id := workspaceID(v)
-		if id == "" {
-			return errors.New("enter a workspace ID (T… or E…) or an https://app.slack.com/client/… URL")
-		}
-		c.WorkspaceID = id
-		return nil
-	}); err != nil {
+	c.Schedule, err = parseSchedule([]string{"--days", strings.Join(v.Days, ","), "--hours", strings.TrimSpace(v.Hours), "--timezone", strings.TrimSpace(v.TimeZone)}, c.Schedule)
+	if err != nil {
 		return c, err
 	}
-	if err := ask("Workspace name (as shown in Slack)", c.WorkspaceName, func(v string) error {
-		if v == "" {
-			return errors.New("enter a workspace name")
-		}
-		c.WorkspaceName = v
-		return nil
-	}); err != nil {
-		return c, err
+	return c, c.validate()
+}
+
+func wizardForm(v *wizardValues, workspaces []wizardWorkspace) *huh.Form {
+	options := make([]huh.Option[string], 0, len(workspaces))
+	nameCounts := map[string]int{}
+	for _, workspace := range workspaces {
+		nameCounts[workspace.Name]++
 	}
-	for _, field := range []struct{ label, flag, fallback string }{
-		{"Visible days (mon-fri or comma-separated days)", "--days", strings.Join(c.Schedule.Days, ",")},
-		{"Visible hours (HH:MM-HH:MM, same day)", "--hours", c.Schedule.Start + "-" + c.Schedule.End},
-		{"Timezone (e.g. Europe/London)", "--timezone", c.Schedule.TimeZone},
-	} {
-		if err := ask(field.label, field.fallback, func(v string) error {
-			s, err := parseSchedule([]string{field.flag, v}, c.Schedule)
-			if err == nil {
-				c.Schedule = s
+	for _, workspace := range workspaces {
+		label := workspace.Name
+		if nameCounts[label] > 1 {
+			label += " (" + workspace.ID + ")"
+		}
+		options = append(options, huh.NewOption(label, workspace.ID))
+	}
+	workspaceName := func() string {
+		for _, workspace := range workspaces {
+			if workspace.ID == v.Workspace {
+				return workspace.Name
 			}
+		}
+		return ""
+	}
+	review := func() string {
+		return fmt.Sprintf("%s\n\nVisible: %s\nHours: %s · %s\n\nHidden at all other times.", workspaceName(), friendlyDays(v.Days), strings.TrimSpace(v.Hours), strings.TrimSpace(v.TimeZone))
+	}
+	scheduleField := func(flag string) func(string) error {
+		return func(value string) error {
+			_, err := parseSchedule([]string{flag, strings.TrimSpace(value)}, defaultConfig().Schedule)
 			return err
-		}); err != nil {
+		}
+	}
+	workspaceDescription := "Choose a signed-in workspace. Type / to filter the list."
+	if len(workspaces) == 1 {
+		workspaceDescription += "\nOnly one workspace is signed in. Add another in Slack so we can switch away when hiding this one."
+	}
+	return huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().Title("Which workspace should follow your working hours?").Description(workspaceDescription).Options(options...).Value(&v.Workspace),
+		).Title("slack-hours · 1/4 · Workspace"),
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().Title("Working days").Description("Space toggles a day. Enter continues.").Options(
+				huh.NewOption("Monday", "mon"), huh.NewOption("Tuesday", "tue"), huh.NewOption("Wednesday", "wed"), huh.NewOption("Thursday", "thu"), huh.NewOption("Friday", "fri"), huh.NewOption("Saturday", "sat"), huh.NewOption("Sunday", "sun"),
+			).Height(9).Value(&v.Days).Validate(func(days []string) error {
+				if len(days) == 0 {
+					return errors.New("choose at least one day")
+				}
+				return nil
+			}),
+		).Title("slack-hours · 2/4 · Days").Description("The workspace stays hidden on unselected days."),
+		huh.NewGroup(
+			huh.NewInput().Title("Visible hours").Description("24-hour time, starting and ending on the same day.").Placeholder("09:00-17:00").Value(&v.Hours).Validate(scheduleField("--hours")),
+			huh.NewInput().Title("Timezone").Description("Use a location such as Europe/London or America/New_York.").Value(&v.TimeZone).Validate(scheduleField("--timezone")),
+		).Title("slack-hours · 3/4 · Hours").Description("The workspace stays hidden outside these hours."),
+		huh.NewGroup(
+			huh.NewConfirm().Title("Save this configuration?").Description(review()).DescriptionFunc(review, v).Affirmative("Save").Negative("Cancel").Value(&v.Save),
+		).Title("slack-hours · 4/4 · Review").Description("Shift+Tab goes back. Ctrl+C cancels without saving."),
+	).WithTheme(huh.ThemeFunc(huh.ThemeCharm))
+}
+
+func configurationWizard(ctx context.Context, input io.Reader, output io.Writer, c Config) (Config, error) {
+	if ctx.Err() != nil {
+		return c, errSetupCancelled
+	}
+	workspaces, err := chooseSlackConnection(ctx, input, output, c.Port)
+	if err != nil {
+		return c, err
+	}
+	selected := workspaces[0].ID
+	for _, workspace := range workspaces {
+		if workspace.ID == c.WorkspaceID {
+			selected = c.WorkspaceID
+		}
+	}
+	if c.WorkspaceID != "" && selected != c.WorkspaceID {
+		replace := false
+		err := huh.NewForm(huh.NewGroup(huh.NewConfirm().Title("Choose a different workspace?").Description(fmt.Sprintf("%s is not signed in. Cancel and sign into it in Slack, or choose a replacement.", c.WorkspaceName)).Affirmative("Choose another").Negative("Cancel").Value(&replace))).WithInput(input).WithOutput(output).RunWithContext(ctx)
+		if ctx.Err() != nil || errors.Is(err, huh.ErrUserAborted) || (err == nil && !replace) {
+			return c, errSetupCancelled
+		}
+		if err != nil {
 			return c, err
 		}
 	}
-	if err := ask("Slack debugging port", strconv.Itoa(c.Port), func(v string) error {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1024 || n > 65535 {
-			return errors.New("enter a port from 1024 to 65535")
-		}
-		c.Port = n
-		return nil
-	}); err != nil {
-		return c, err
-	}
-	if err := c.validate(); err != nil {
-		return c, err
-	}
-	fmt.Fprintf(output, "\nWorkspace: %s (%s)\nVisible: %s, %s-%s %s\nHidden at all other times. Debugging port: %d\n\n", c.WorkspaceName, c.WorkspaceID, strings.Join(c.Schedule.Days, ","), c.Schedule.Start, c.Schedule.End, c.Schedule.TimeZone, c.Port)
-	confirmed := false
-	if err := ask("Save configuration? (y/N)", "n", func(v string) error {
-		switch strings.ToLower(v) {
-		case "y", "yes":
-			confirmed = true
-		case "n", "no":
-		default:
-			return errors.New("enter y or n")
-		}
-		return nil
-	}); err != nil {
-		return c, err
-	}
-	if !confirmed {
+	v := wizardValues{Workspace: selected, Name: c.WorkspaceName, Days: append([]string(nil), c.Schedule.Days...), Hours: c.Schedule.Start + "-" + c.Schedule.End, TimeZone: c.Schedule.TimeZone, Port: strconv.Itoa(c.Port)}
+	err = wizardForm(&v, workspaces).WithInput(input).WithOutput(output).RunWithContext(ctx)
+	if ctx.Err() != nil || errors.Is(err, huh.ErrUserAborted) {
 		return c, errSetupCancelled
 	}
-	return c, nil
+	if err != nil {
+		return c, err
+	}
+	if !v.Save {
+		return c, errSetupCancelled
+	}
+	for _, workspace := range workspaces {
+		if workspace.ID == v.Workspace {
+			v.Name = workspace.Name
+		}
+	}
+	return v.config()
+}
+
+func friendlyDays(days []string) string {
+	names := map[string]string{"mon": "Monday", "tue": "Tuesday", "wed": "Wednesday", "thu": "Thursday", "fri": "Friday", "sat": "Saturday", "sun": "Sunday"}
+	if strings.Join(days, ",") == "mon,tue,wed,thu,fri" {
+		return "Monday to Friday"
+	}
+	out := make([]string, 0, len(days))
+	for _, day := range days {
+		out = append(out, names[day])
+	}
+	return strings.Join(out, ", ")
 }

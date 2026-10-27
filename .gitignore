@@ -3,3 +3,4 @@ node_modules/
 bin/
 !/cmd/slack-hours/hooks/
 !/cmd/slack-hours/hooks/*.js
+dist/

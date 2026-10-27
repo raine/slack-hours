@@ -98,3 +98,30 @@ func TestLiveDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Workspace discovery reads presentation data without changing visibility.
+func TestLiveWorkspaceDiscovery(t *testing.T) {
+	if os.Getenv("SLACK_HOURS_LIVE") != "1" {
+		t.Skip("set SLACK_HOURS_LIVE=1 to read workspaces from Slack")
+	}
+	c, _, err := defaultPaths().load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	workspaces, err := listWizardWorkspaces(ctx, c.Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, workspace := range workspaces {
+		if workspace.ID == c.WorkspaceID {
+			if workspace.Name != c.WorkspaceName {
+				t.Fatal("configured workspace name differs from Slack")
+			}
+			t.Logf("discovered %d workspaces, including the configured workspace", len(workspaces))
+			return
+		}
+	}
+	t.Fatal("configured workspace is missing from discovery")
+}

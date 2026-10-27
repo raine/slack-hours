@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+version=${1:-}
+if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+  printf 'Usage: %s vMAJOR.MINOR.PATCH[-prerelease]\n' "$0" >&2
+  exit 1
+fi
+repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_dir"
+dist_dir=${SLACK_HOURS_DIST_DIR:-"$repo_dir/dist"}
+mkdir -p "$dist_dir"
+dist_dir=$(cd "$dist_dir" && pwd)
+package_dir=$(mktemp -d)
+trap 'rm -rf "$package_dir"' EXIT
+
+# Static binaries carry dependency licenses alongside the project license.
+go mod download
+mkdir -p "$package_dir/licenses"
+cp LICENSE README.md "$package_dir/"
+cp "$(go env GOROOT)/LICENSE" "$package_dir/licenses/go-LICENSE"
+while read -r module_path module_dir; do
+  [[ -n "$module_dir" ]] || continue
+  for license in "$module_dir"/LICENSE* "$module_dir"/COPYING* "$module_dir"/NOTICE* "$module_dir"/license*; do
+    [[ -f "$license" ]] || continue
+    license_name="${module_path//\//_}-$(basename "$license")"
+    cp "$license" "$package_dir/licenses/$license_name"
+  done
+done < <(go list -m -f '{{if not .Main}}{{.Path}} {{.Dir}}{{end}}' all)
+
+for arch in arm64 amd64; do
+  archive="slack-hours-darwin-$arch.tar.gz"
+  CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath \
+    -ldflags="-s -w -X main.version=${version#v}" \
+    -o "$package_dir/slack-hours" ./cmd/slack-hours
+  tar -czf "$dist_dir/$archive" -C "$package_dir" slack-hours README.md LICENSE licenses
+  (cd "$dist_dir" && shasum -a 256 "$archive" > "slack-hours-darwin-$arch.sha256")
+  printf 'Built %s\n' "$dist_dir/$archive"
+done

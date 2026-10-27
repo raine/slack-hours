@@ -11,24 +11,29 @@ import (
 	"testing"
 )
 
-func TestWizardValidationAndURL(t *testing.T) {
-	input := "invalid\nhttps://app.slack.com/client/TWORK/channel\nWork\nmon,mon\nmon-fri\n17:00-09:00\n09:00-17:00\nBad/Zone\nEurope/London\n80\n9339\ny\n"
-	var out bytes.Buffer
-	c, err := configurationWizard(context.Background(), strings.NewReader(input), &out, defaultConfig())
-	if err != nil {
-		t.Fatal(err)
+func TestWizardValues(t *testing.T) {
+	valid := wizardValues{Workspace: " https://app.slack.com/client/TWORK/channel ", Name: " Work ", Days: []string{"mon", "fri"}, Hours: "09:00-17:00", TimeZone: "Europe/London", Port: "9339"}
+	c, err := valid.config()
+	if err != nil || c.WorkspaceID != "TWORK" || c.WorkspaceName != "Work" || c.Schedule.Start != "09:00" || c.Port != 9339 {
+		t.Fatal(c, err)
 	}
-	if c.WorkspaceID != "TWORK" || c.WorkspaceName != "Work" || c.Schedule.Start != "09:00" || c.Schedule.End != "17:00" || c.Schedule.TimeZone != "Europe/London" || c.Port != 9339 {
-		t.Fatal(c)
-	}
-	for _, message := range []string{"enter a workspace ID", "invalid schedule days", "same-day interval", "enter a port", "Workspace: Work (TWORK)"} {
-		if !strings.Contains(out.String(), message) {
-			t.Fatalf("missing %q in %s", message, out.String())
+	for _, mutate := range []func(*wizardValues){
+		func(v *wizardValues) { v.Workspace = "https://example.com/client/TWORK" },
+		func(v *wizardValues) { v.Name = " " },
+		func(v *wizardValues) { v.Days = nil },
+		func(v *wizardValues) { v.Hours = "17:00-09:00" },
+		func(v *wizardValues) { v.TimeZone = "Bad/Zone" },
+		func(v *wizardValues) { v.Port = "80" },
+	} {
+		v := valid
+		mutate(&v)
+		if _, err := v.config(); err == nil {
+			t.Fatal("accepted invalid values", v)
 		}
 	}
 }
 func TestWizardCancelLeavesFilesUnchanged(t *testing.T) {
-	for _, answer := range []string{"", "\n\n\n\n\n\nn\n"} {
+	for _, cancelErr := range []error{errSetupCancelled, context.Canceled} {
 		p := Paths{t.TempDir(), t.TempDir()}
 		if err := writeJSON(p.configFile(), testConfig()); err != nil {
 			t.Fatal(err)
@@ -37,8 +42,8 @@ func TestWizardCancelLeavesFilesUnchanged(t *testing.T) {
 			t.Fatal(err)
 		}
 		before, _ := os.ReadFile(p.configFile())
-		err := configure(context.Background(), p, strings.NewReader(answer), io.Discard)
-		if !errors.Is(err, errSetupCancelled) {
+		err := configureWithWizard(context.Background(), p, nil, io.Discard, func(context.Context, io.Reader, io.Writer, Config) (Config, error) { return Config{}, cancelErr })
+		if !errors.Is(err, cancelErr) {
 			t.Fatal(err)
 		}
 		after, _ := os.ReadFile(p.configFile())
@@ -50,7 +55,7 @@ func TestWizardCancelLeavesFilesUnchanged(t *testing.T) {
 }
 func TestWizardSavesPrivateConfig(t *testing.T) {
 	p := Paths{filepath.Join(t.TempDir(), "config"), t.TempDir()}
-	err := configure(context.Background(), p, strings.NewReader("TWORK\nWork\n\n\n\n\ny\n"), io.Discard)
+	err := configureWithWizard(context.Background(), p, nil, io.Discard, func(context.Context, io.Reader, io.Writer, Config) (Config, error) { return testConfig(), nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,26 +72,19 @@ func TestWizardSavesPrivateConfig(t *testing.T) {
 	}
 }
 
-type wizardWriter func([]byte) (int, error)
-
-func (w wizardWriter) Write(b []byte) (int, error) { return w(b) }
-
 func TestWizardDoesNotOverwriteConcurrentEdit(t *testing.T) {
 	p := Paths{t.TempDir(), t.TempDir()}
 	c := testConfig()
 	if err := writeJSON(p.configFile(), c); err != nil {
 		t.Fatal(err)
 	}
-	out := wizardWriter(func(b []byte) (int, error) {
-		if strings.Contains(string(b), "Save configuration?") {
-			c.WorkspaceName = "Changed elsewhere"
-			if err := writeJSON(p.configFile(), c); err != nil {
-				return 0, err
-			}
+	err := configureWithWizard(context.Background(), p, nil, io.Discard, func(_ context.Context, _ io.Reader, _ io.Writer, draft Config) (Config, error) {
+		c.WorkspaceName = "Changed elsewhere"
+		if err := writeJSON(p.configFile(), c); err != nil {
+			return draft, err
 		}
-		return len(b), nil
+		return draft, nil
 	})
-	err := configure(context.Background(), p, strings.NewReader("\n\n\n\n\n\ny\n"), out)
 	if err == nil || !strings.Contains(err.Error(), "changed during setup") {
 		t.Fatal(err)
 	}

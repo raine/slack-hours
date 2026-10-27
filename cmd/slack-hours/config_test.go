@@ -131,6 +131,7 @@ func BenchmarkNextTransition(b *testing.B) {
 func testConfig() Config {
 	c := defaultConfig()
 	c.WorkspaceID, c.WorkspaceName = "TWORK", "Work"
+	c.Schedule = Schedule{[]string{"mon", "tue", "wed", "thu", "fri"}, "06:00", "18:00", "Europe/Helsinki"}
 	return c
 }
 
@@ -152,5 +153,28 @@ func TestInitRequiresIdentityAndPreservesConfig(t *testing.T) {
 	after, _ := os.ReadFile(p.configFile())
 	if string(before) != string(after) {
 		t.Fatal("overwrote config")
+	}
+}
+
+func TestDefaultTimezone(t *testing.T) {
+	t.Setenv("TZ", "America/New_York")
+	c := defaultConfig()
+	if c.Schedule.TimeZone != "America/New_York" || c.Schedule.Start != "09:00" || c.Schedule.End != "17:00" {
+		t.Fatal(c.Schedule)
+	}
+	t.Setenv("TZ", "invalid/timezone")
+	if _, err := time.LoadLocation(defaultTimeZone()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScriptedInitSchedule(t *testing.T) {
+	p := Paths{t.TempDir(), t.TempDir()}
+	if runCLI(context.Background(), []string{"init", "--workspace-id", "TWORK", "--workspace-name", "Work", "--days", "mon,wed", "--hours", "10:00-16:00", "--timezone", "Europe/London"}, p) != 0 {
+		t.Fatal("init failed")
+	}
+	c, _, err := p.load()
+	if err != nil || c.Schedule.Start != "10:00" || c.Schedule.TimeZone != "Europe/London" || len(c.Schedule.Days) != 2 {
+		t.Fatal(c, err)
 	}
 }

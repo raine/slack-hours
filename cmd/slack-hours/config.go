@@ -52,7 +52,23 @@ func (p Paths) configFile() string   { return filepath.Join(p.ConfigDir, "config
 func (p Paths) overrideFile() string { return filepath.Join(p.StateDir, "override.json") }
 func (p Paths) socketFile() string   { return filepath.Join(p.StateDir, "control.sock") }
 func defaultConfig() Config {
-	return Config{"", "", 9338, Schedule{[]string{"mon", "tue", "wed", "thu", "fri"}, "06:00", "18:00", "Europe/Helsinki"}}
+	return Config{"", "", 9338, Schedule{[]string{"mon", "tue", "wed", "thu", "fri"}, "09:00", "17:00", defaultTimeZone()}}
+}
+
+func defaultTimeZone() string {
+	if zone := os.Getenv("TZ"); zone != "" {
+		if _, err := time.LoadLocation(zone); err == nil {
+			return zone
+		}
+	}
+	if path, err := os.Readlink("/etc/localtime"); err == nil {
+		if _, zone, ok := strings.Cut(path, "zoneinfo/"); ok {
+			if _, err := time.LoadLocation(zone); err == nil {
+				return zone
+			}
+		}
+	}
+	return "UTC"
 }
 
 var weekdays = []string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}

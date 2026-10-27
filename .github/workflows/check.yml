@@ -17,3 +17,9 @@ jobs:
           node-version: '22'
       - run: make check
       - run: make build
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck scripts/*

@@ -1,56 +1,95 @@
 # slack-hours
 
-Hide one workspace in Slack for macOS outside your working hours. Stay signed
-in, keep your other workspaces available, and leave notification settings on
-other devices alone.
+Want to switch off work Slack without closing your other workspaces?
 
-While hidden, the workspace disappears from the sidebar and native menus.
-slack-hours blocks its numbered workspace shortcut, desktop notifications,
-message and calendar sounds, and huddle-invite sound checks. It also removes
-that workspace's unread counts from updates to the Dock badge.
+slack-hours hides and mutes one workspace on your Mac outside your working
+hours. Keep your communities and personal workspaces open, stay signed in to
+work, and leave notification settings on your phone and other computers alone.
+
+The hidden workspace disappears from the sidebar and native menus. Its
+Cmd+number shortcut is blocked, along with desktop notifications, message and
+calendar sounds, and huddle invitation sounds. Its unread counts are excluded
+from Dock badge updates.
 
 Experimental. Tested with Slack 4.52.182. Slack updates can break the hooks,
-and startup or reload gaps can let notifications through.
+and notifications can slip through while Slack starts or reloads.
 
-## Install
+## Set up
 
-You need macOS, Slack at `/Applications/Slack.app`, and Go 1.25 or later to
-build. The installed tool is a single binary; it needs neither Go nor Node.
+You need macOS and Slack at `/Applications/Slack.app`. Sign into your workspaces
+first. Slack needs another workspace to switch to when hiding the selected one;
+with only one signed in, hiding can remain incomplete.
 
-Find your workspace ID in its Slack web URL: the ID follows `/client/`, for
-example `https://app.slack.com/client/T01234567/...`. Use the workspace name
-exactly as Slack displays it.
+slack-hours controls Slack through a local debugging port. Other programs on
+this Mac can use that port to access your signed-in Slack. Never forward it.
+Quit Slack and reopen it normally to disable the connection.
+
+Prebuilt releases are not available yet. Build from source with Go 1.25.8 or
+later, Git, and Make:
 
 ```sh
+git clone https://github.com/raine/slack-hours.git
+cd slack-hours
 make build
 ./bin/slack-hours init
+```
+
+The wizard reads your signed-in workspaces so you can choose by name. It asks
+for visible days, hours, and timezone, then shows a summary before saving.
+New settings default to Monday through Friday, 09:00-17:00 in your Mac's
+timezone (UTC if detection fails). Existing settings keep their values.
+
+Use arrow keys to choose a workspace, Space to toggle days, Enter to continue,
+and Shift+Tab to go back. Cancel or Ctrl+C leaves configuration unchanged.
+If Slack needs to restart for setup, the wizard asks you to quit it with Cmd+Q;
+closing its window is not enough. It then opens Slack for you.
+
+Start the scheduler and verify the result:
+
+```sh
 ./bin/slack-hours install
+"$HOME/.local/bin/slack-hours" status
 ```
 
-The setup wizard asks for your workspace ID or URL, workspace name, visible
-days and hours, timezone, and debugging port. Press Enter to accept defaults.
-Review the summary and confirm to save; Ctrl+C cancels without changing files.
+Check for `Live guards: verified` and `Scheduler installed: true`. The workspace
+may hide immediately if setup finishes outside its visible hours. If Slack is
+unreachable, quit Slack, run `"$HOME/.local/bin/slack-hours" launch`, and check
+status again.
 
-For scripts, supply the workspace directly to use the default schedule:
+To use the shorter command, add this line to your shell profile (`~/.zshrc` for
+zsh), then open a new terminal:
 
 ```sh
-./bin/slack-hours init --workspace-id T01234567 --workspace-name 'Work'
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Add `~/.local/bin` to your `PATH`. Then quit Slack and start it with:
+**Open Slack with `slack-hours launch` from now on.** Dock, Spotlight, and
+Slack's own login item can launch it without the connection this tool needs.
+If that happens, quit Slack and use `slack-hours launch`. The scheduler starts
+at login but does not open Slack or force it to quit.
 
-```sh
-slack-hours launch
+## Set up with an agent
+
+Paste this into a coding agent that can run commands on your Mac:
+
+```text
+Set up https://github.com/raine/slack-hours on this Mac. Read the current
+README and inspect any existing installation and configuration first.
+Use a published macOS release if available; otherwise build from source.
+Tell me if a prerequisite is missing before installing additional tools.
+
+Ask which workspace, working days, visible hours, and timezone I want.
+Explain the local debugging connection. If Slack needs to quit, ask me
+to quit it, then use slack-hours launch. Use the wizard or workspaces
+--json to show actual workspace names; never guess a workspace ID.
+Preserve existing settings and overrides unless I choose to change them.
+
+Install the scheduler and verify both live Slack controls and scheduler
+status. Use full executable paths if PATH is not configured. Report the
+workspace, schedule, current mode, next change, and any incomplete step.
+Remind me to open Slack with slack-hours launch. Do not send messages,
+change account preferences, or sign out of any workspace.
 ```
-
-Slack must be launched this way to enable its local debugging connection.
-Ordinary launches do not enable it. The tool never forces Slack to quit, and
-the scheduler leaves Slack closed when you close it.
-
-`install` copies the binary to `~/.local/lib/slack-hours/slack-hours` and starts
-a login service. It runs independently of the source checkout. To update it,
-run `make install`. If status asks you to reload Slack after an update, quit
-Slack and run `slack-hours launch` again.
 
 ## Daily use
 
@@ -59,17 +98,31 @@ slack-hours hide     # Hide until the next scheduled transition
 slack-hours show     # Restore until the next scheduled transition
 slack-hours auto     # Clear the override and follow the schedule
 slack-hours status   # Verify the requested mode in Slack
-slack-hours check    # Apply the mode and test local suppression when hidden
+slack-hours check    # Test local suppression when hidden
 ```
 
 Showing the workspace restores its entry and unread counts without switching
-to it. Hiding the selected workspace switches to another workspace in the sidebar,
-if one is available. Without an alternative, the workspace can remain open
-and the command reports that hiding is incomplete.
+to it. Hiding the selected workspace switches to another one in the sidebar,
+if available.
 
-The default schedule shows the workspace Monday through Friday, 06:00 to
-18:00 in Europe/Helsinki, including daylight saving changes. It stays hidden
-at other times.
+Overrides last until the next change in scheduled visibility. For example,
+`show` on Friday evening lasts until Monday morning. Use `auto` to end it
+sooner. If Slack is closed or unreachable, mode changes are saved but the
+command returns an error because it could not apply them. The scheduler tries
+again once Slack is reachable.
+
+## Change the schedule
+
+```sh
+slack-hours configure
+```
+
+The wizard uses your current settings as defaults. Saving keeps any manual
+hide/show override; use `auto` to return to the schedule. A running scheduler
+picks up edits within a minute. Changing the target workspace requires quitting
+Slack and running `slack-hours launch` again.
+
+You can also change the schedule directly:
 
 ```sh
 slack-hours schedule
@@ -77,99 +130,143 @@ slack-hours schedule set --days mon-fri --hours 09:00-17:00 \
   --timezone Europe/London
 ```
 
-Days can also be comma-separated, such as `mon,tue,wed`. Hours must start and
-end on the same day. Schedule changes clear manual overrides and apply
-immediately when Slack is reachable.
+Days can be comma-separated, such as `mon,tue,wed`. Hours must start and end on
+the same day. `schedule set` clears manual overrides and applies immediately
+when Slack is reachable. Timezones follow daylight saving changes.
 
-Overrides last until the next change in scheduled visibility. For example,
-`show` on Friday evening lasts until Monday morning. Use `auto` to end it
-sooner. If Slack is offline, commands save the requested mode but return an
-error because they could not apply it. The scheduler retries automatically.
+## Release installer and updates
+
+Once a binary release is published, the installer downloads the matching
+Apple Silicon or Intel archive and verifies its SHA-256 checksum:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/raine/slack-hours/main/scripts/install -o /tmp/install-slack-hours
+bash /tmp/install-slack-hours
+"$HOME/.local/bin/slack-hours" init
+"$HOME/.local/bin/slack-hours" install
+"$HOME/.local/bin/slack-hours" status
+```
+
+The installer preserves configuration. Run it again to update, then run
+`slack-hours install` to restart the scheduler with the new binary. Set
+`SLACK_HOURS_VERSION` to an existing release tag to install a specific version.
+
+For source builds, update the checkout and run `make install`. If status asks
+you to reload Slack after an update, quit it and run `slack-hours launch`.
+
+`SLACK_HOURS_PREFIX` changes the installer's standalone CLI location (default
+`~/.local`). The login service uses the standard paths under `~/.local`
+regardless of this installer setting.
 
 ## Troubleshooting and limits
 
-Run `slack-hours status` to check whether Slack's visibility and notification
-controls are installed and match the requested mode. The command exits nonzero
-if verification fails. Add `--json` for detailed results. If debugging is
-unavailable, quit Slack and run `slack-hours launch`.
+`status` exits nonzero when Slack's controls cannot be verified. Use
+`slack-hours status --json` for details.
 
-- Startup, reloads, and wake can leave gaps in suppression. Schedule boundaries
-  have timers; a minute health check catches missed events and clock or config
-  changes. Reconnection retries back off to 30 seconds while Slack is offline.
-- `check` tests synthetic inputs at the local notification and sound hooks.
-  It does not send a real message or place a huddle call. Other audio paths may
-  exist. Existing calls, audio, and previously delivered notifications remain.
-- Hidden workspace selections outside the numbered shortcut path fall back to
-  a redirect and may briefly appear. Menu filtering depends on Slack's markup;
-  not every popover or deep link is covered. Multiple main client windows are
-  rejected.
-- The debugging port (9338 by default) listens on loopback, but other local processes can use it
-  to access your signed-in Slack. Never forward or expose it. Quit Slack and
-  reopen it normally to disable debugging.
+- If Slack opened normally, quit it and run `slack-hours launch`.
+- Keep one main Slack window open. Extra main windows prevent attachment.
+- Sign into the target workspace in Slack before running setup. If a Slack
+  update breaks workspace discovery, setup reports the error instead of
+  guessing which workspace to use.
+- Startup, reloads, and wake can leave gaps in suppression. A minute health
+  check catches missed events and clock or configuration changes. While Slack
+  is offline, reconnection retries back off to 30 seconds.
+- Opening a hidden workspace through another route, such as a link, may
+  briefly show it before the redirect. Some menus or popovers may still list
+  it. Filtering depends on Slack's interface.
+- `check` uses synthetic inputs at the local notification and sound hooks. It
+  does not send a message or place a huddle call. Other audio paths may exist.
+  Existing calls, audio, and previously delivered notifications remain.
 
-The tool changes local presentation metadata, which Slack may persist. It
-keeps sign-in state intact and does not change account preferences, send
-messages, or patch Slack's installed files. Runtime hooks disappear on reload
-or restart; the scheduler reinstalls them while debugging is available.
+Hiding changes Slack's local workspace list, which Slack may save. Sign-in
+state stays intact. The tool does not change account preferences, send
+messages, or patch Slack's installed files.
 
-## Configuration and removal
+## Files and removal
 
-`init` creates configuration only if it does not exist; rerunning it with
-different workspace flags leaves existing settings unchanged. Run
-`slack-hours configure` to edit settings interactively, using existing values
-as defaults. Saving preserves manual hide/show overrides; run
-`slack-hours auto` to return to the schedule. You can also edit `workspaceId`,
-`workspaceName`, `port`, and `schedule` in
-`~/.config/slack-hours/config.json`.
-
-After changing the workspace or port, quit Slack and run `slack-hours launch`
-again. Schedule edits made through the wizard take effect within a minute
-while the scheduler is running. The `schedule set` command applies them
-immediately when Slack is reachable. Neither requires a restart.
-
-Other files:
+Configuration is stored in `~/.config/slack-hours/config.json`. `init` never
+overwrites it; use `configure` to make changes. The debugging port is stored
+as `port` and defaults to 9338. Changing it requires quitting Slack and
+running `slack-hours launch` again.
 
 | Path | Contents |
 | --- | --- |
+| `~/.local/lib/slack-hours/slack-hours` | Installed binary |
+| `~/.local/bin/slack-hours` | CLI symlink |
 | `~/.local/state/slack-hours/override.json` | Temporary manual override |
 | `~/.local/state/slack-hours/control.sock` | Private daemon socket (0600) |
 | `~/.local/state/slack-hours/daemon.log` | Scheduler state changes and errors |
 | `~/.local/state/slack-hours/daemon-error.log` | Service stderr |
-| `~/.local/state/slack-hours/last-result.json` | Last changed result; use `status` for a live check |
+| `~/.local/state/slack-hours/last-result.json` | Last changed result; use `status` for live results |
 | `~/Library/LaunchAgents/local.slack-hours.plist` | Login service |
 
-`SLACK_HOURS_CONFIG_DIR` and `SLACK_HOURS_STATE_DIR` override the configuration
-and state directories. Use the same values when initializing, installing and
-running commands. `install` records those paths in the login service; later
-changes to your shell environment do not update that service.
+`SLACK_HOURS_CONFIG_DIR` and `SLACK_HOURS_STATE_DIR` override storage paths.
+Use the same values for setup, installation, and commands. `install` records
+those paths in the service; later shell environment changes do not update it.
 
 ```sh
 slack-hours uninstall
 ```
 
-This stops the scheduler and restores the workspace if Slack is reachable.
-It retains the binary and configuration. If restoration fails, quit and
-reopen Slack normally; Slack rebuilds its workspace list from the web client.
+This stops the scheduler, clears any override, and restores the workspace if
+Slack is reachable. If restoration fails, quit and reopen Slack normally.
+It retains the binary and configuration. For full removal, also delete the
+CLI symlink and the `slack-hours` directories under `~/.local/lib`,
+`~/.local/state`, and `~/.config`.
+
+## Scripted setup
+
+You can read workspace names and IDs before creating configuration:
+
+```sh
+./bin/slack-hours launch
+./bin/slack-hours workspaces --json
+```
+
+Initialize using the exact ID and name from that list:
+
+```sh
+./bin/slack-hours init --workspace-id T01234567 --workspace-name 'Work' \
+  --days mon-fri --hours 09:00-17:00 --timezone Europe/London
+./bin/slack-hours install
+```
+
+Replace the example values with your workspace and schedule. These flags
+never overwrite existing configuration.
 
 ## Development
 
+CLI source, Go tests, and embedded hooks live in `cmd/slack-hours/`. JavaScript
+hook tests live in `test/`; they require Node.js.
+
 ```sh
-make check   # Go vet, race-enabled tests, JavaScript hook tests
+make check
 make build
+shellcheck scripts/*
+actionlint
 ```
 
-CLI source, Go tests, and embedded hooks live in `cmd/slack-hours/`.
-JavaScript hook tests live in `test/`. Node.js is required for the hook tests. The runtime uses Go,
-`gorilla/websocket`, and embedded JavaScript hooks. The daemon keeps one
-connection to Slack, with timers and renderer events driving reconciliation.
-A filtered DOM observer maintains hidden entries and disconnects while shown.
-
-The optional live test changes workspace visibility and reloads your actual
-Slack client. It restores the original override afterward:
+The optional live test changes visibility and reloads your actual Slack
+client, then restores the original override:
 
 ```sh
 SLACK_HOURS_LIVE=1 go test -run '^TestLiveDaemon$' -v ./cmd/slack-hours
 ```
+
+Push a version tag such as `v0.1.0` to build and publish Apple Silicon and Intel
+archives with SHA-256 checksums. Tests run before packaging. Both binaries and
+the installer are checked on matching macOS runners before publication.
+Tags such as `v0.2.0-rc.1` produce GitHub prereleases.
+
+To build and test the same archives locally:
+
+```sh
+make release VERSION=v0.1.0
+python3 test/installer.py dist v0.1.0
+```
+
+Archives go to `dist/` and include the README and dependency licenses. The
+version comes from the tag; ordinary source builds report `dev`.
 
 ## License
 

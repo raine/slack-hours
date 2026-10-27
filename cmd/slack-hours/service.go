@@ -137,28 +137,39 @@ func launchSlack(ctx context.Context, p Paths) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if _, _, err = discovery(ctx, config.Port); err != nil {
+	if err := startSlack(ctx, config.Port); err != nil {
+		return Result{}, err
+	}
+	return dispatch(ctx, p, Request{Command: "reconcile"})
+}
+
+func startSlack(ctx context.Context, port int) error {
+	if runtime.GOOS != "darwin" {
+		return errors.New("launch requires macOS")
+	}
+	var err error
+	if _, _, err = discovery(ctx, port); err != nil {
 		err = exec.CommandContext(ctx, "/usr/bin/pgrep", "-x", "Slack").Run()
 		if err == nil {
-			return Result{}, errors.New("Slack is running without usable debugging; quit Slack, then run slack-hours launch")
+			return errors.New("Slack is running without usable debugging; quit Slack, then retry")
 		}
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			return Result{}, err
+			return err
 		}
-		if err = command(ctx, "/usr/bin/open", "-a", "/Applications/Slack.app", "--args", "--remote-debugging-address=127.0.0.1", fmt.Sprintf("--remote-debugging-port=%d", config.Port)); err != nil {
-			return Result{}, err
+		if err = command(ctx, "/usr/bin/open", "-a", "/Applications/Slack.app", "--args", "--remote-debugging-address=127.0.0.1", fmt.Sprintf("--remote-debugging-port=%d", port)); err != nil {
+			return err
 		}
 		for until := time.Now().Add(15 * time.Second); time.Now().Before(until); {
-			if _, _, err = discovery(ctx, config.Port); err == nil {
+			if _, _, err = discovery(ctx, port); err == nil {
 				break
 			}
 			select {
 			case <-ctx.Done():
-				return Result{}, ctx.Err()
+				return ctx.Err()
 			case <-time.After(500 * time.Millisecond):
 			}
 		}
 	}
-	return dispatch(ctx, p, Request{Command: "reconcile"})
+	return err
 }
