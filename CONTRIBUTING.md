@@ -1,5 +1,17 @@
 # Development
 
+To build from source, install Go 1.25.8 or later, Git, and Make:
+
+```sh
+git clone https://github.com/raine/slack-hours.git
+cd slack-hours
+make build
+./bin/slack-hours init
+./bin/slack-hours install
+```
+
+For source updates, pull the latest code and run `make install`.
+
 Go source, tests, and embedded hooks live in `cmd/slack-hours/`. JavaScript
 hook tests live in `test/` and require Node.js.
 

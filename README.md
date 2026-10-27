@@ -11,14 +11,12 @@ work or changing notification settings on your other devices.
 You need macOS, Slack in `/Applications`, and at least two signed-in
 workspaces so Slack has somewhere to switch when work is hidden.
 
-There are no prebuilt releases yet. To build from source, install Go 1.25.8
-or later, Git, and Make, then run:
+Install the binary, then run setup:
 
 ```sh
-git clone https://github.com/raine/slack-hours.git
-cd slack-hours
-make build
-./bin/slack-hours init
+curl -fsSL https://raw.githubusercontent.com/raine/slack-hours/main/scripts/install -o /tmp/install-slack-hours
+bash /tmp/install-slack-hours
+"$HOME/.local/bin/slack-hours" init
 ```
 
 Pick your work workspace by name, choose its working days and hours, and
@@ -28,7 +26,7 @@ asks before saving.
 Then start the scheduler:
 
 ```sh
-./bin/slack-hours install
+"$HOME/.local/bin/slack-hours" install
 "$HOME/.local/bin/slack-hours" status
 ```
 
@@ -103,8 +101,8 @@ If it isn't working, keep just one main Slack window open and run
 
 ## Update or remove
 
-Pull the latest code and run `make install`, then `slack-hours status`
-to check the update.
+Run the installer again, then `slack-hours install` and `slack-hours status`
+to restart the scheduler and check the update. Your settings are preserved.
 
 To stop scheduling and restore the workspace:
 
